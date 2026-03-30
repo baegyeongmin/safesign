@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import json
@@ -27,9 +28,18 @@ SYSTEM_PROMPT = """당신은 한국 노동법 전문가입니다.
 근로계약서의 특정 조항을 분석하여 다음 3단계 중 하나로 판정하고, 반드시 JSON으로만 응답하세요.
 
 판정 기준:
-- 즉시거절: 법령 위반이 명백하거나 근로자에게 심각하게 불리한 조항
-- 협상가능: 법령 위반은 아니지만 근로자에게 불리하여 협상이 필요한 조항
-- 법무검토필요: 해석이 모호하거나 전문가 검토가 필요한 조항
+- 즉시거절: 아래 예시처럼 강행법규를 명백히 위반한 경우에만 사용.
+  예) 최저임금 미달, 법정 초과근무 한도(주 12시간) 초과, 연차·퇴직금·수당 지급 의무 명시적 배제, 부당해고 조건 등.
+  단순히 불리하거나 협상 여지가 있는 조항은 해당하지 않음.
+- 협상가능: 법령 위반은 아니지만 근로자에게 불리하여 더 유리한 조건으로 협상할 수 있는 조항.
+  예) 법정 기준은 충족하나 업계 평균보다 낮은 급여, 과도한 전직 제한, 일방적 업무 변경 조항 등.
+- 법무검토필요: 중립적·표준적 조항이거나 해석이 필요한 경우. 아래 유형은 반드시 이 판정 사용.
+  예) 계약기간 명시, 근무장소 명시, 직무 기술, 비밀유지 조항, 표준적인 복무규정 준수 의무 등.
+
+규칙:
+1. 중립적이거나 단순 사실을 명시하는 조항은 반드시 법무검토필요로 판정.
+2. 즉시거절은 수당 미지급·법정 한도 초과 등 명백한 위법이 확인된 경우에만 사용.
+3. 위법 여부가 불분명하면 즉시거절 대신 협상가능 또는 법무검토필요로 판정.
 
 응답 JSON 스키마 (이 형식만 허용):
 {
@@ -61,6 +71,20 @@ def _extract_text_from_pdf(pdf_bytes: bytes) -> str:
     return "\n".join(page.get_text() for page in doc)
 
 
+def _split_clauses(text: str) -> list[str]:
+    """"제N조" 패턴으로 조항 분리. 조항 번호를 각 조항 텍스트에 보존."""
+    parts = re.split(r"(제\d+조)", text)
+    # parts = ['preamble', '제1조', ' 내용...', '제2조', ' 내용...', ...]
+    clauses = []
+    i = 1  # index 0은 조항 번호 이전 서문
+    while i + 1 < len(parts):
+        clause_text = (parts[i] + parts[i + 1]).strip()
+        if clause_text:
+            clauses.append(clause_text)
+        i += 2
+    return clauses
+
+
 def _build_user_prompt(clause: str, law_chunks: list[dict]) -> str:
     context_blocks = "\n\n".join(
         f"[{c['law_name']} {c['article_no']}]\n{c['text']}"
@@ -76,10 +100,11 @@ def _build_user_prompt(clause: str, law_chunks: list[dict]) -> str:
 
 
 def _parse_claude_response(content: str) -> dict:
-    """Claude 응답에서 JSON을 추출하고 파싱."""
-    # 마크다운 코드블록 제거
-    cleaned = re.sub(r"```(?:json)?\s*|\s*```", "", content).strip()
-    return json.loads(cleaned)
+    """Claude 응답에서 JSON 객체만 추출하여 파싱. 코드블록 이후 추가 텍스트 무시."""
+    m = re.search(r"\{[\s\S]*\}", content)
+    if not m:
+        raise ValueError("JSON을 찾을 수 없습니다.")
+    return json.loads(m.group())
 
 
 def _cross_check_citations(cited_laws: list[dict], chunks: list[dict]) -> list[dict]:
@@ -150,16 +175,30 @@ def _analyze_clause(clause: str) -> dict:
 
 @app.post("/analyze")
 async def analyze(file: UploadFile = File(...)):
-    """PDF 업로드 → 텍스트 추출 → 파이프라인 실행."""
+    """PDF 업로드 → 조항 분리 → 병렬 분석."""
     if file.content_type != "application/pdf":
         raise HTTPException(status_code=400, detail="PDF 파일만 업로드 가능합니다.")
 
     pdf_bytes = await file.read()
-    clause = _extract_text_from_pdf(pdf_bytes).strip()
-    if not clause:
+    full_text = _extract_text_from_pdf(pdf_bytes).strip()
+    if not full_text:
         raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출할 수 없습니다.")
 
-    return _analyze_clause(clause)
+    clauses = _split_clauses(full_text)
+    if not clauses:
+        raise HTTPException(status_code=422, detail="조항을 찾을 수 없습니다. '제N조' 형식의 조항이 있는지 확인하세요.")
+
+    loop = asyncio.get_event_loop()
+    results = await asyncio.gather(
+        *[loop.run_in_executor(None, _analyze_clause, c) for c in clauses]
+    )
+
+    return {
+        "clauses": [
+            {"clause_text": clause, **result}
+            for clause, result in zip(clauses, results)
+        ]
+    }
 
 
 @app.post("/analyze/text")

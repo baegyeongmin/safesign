@@ -2,6 +2,8 @@
 
 import { useState, useRef } from "react";
 
+// ── 타입 ─────────────────────────────────────────────────────────────────────
+
 type CitedLaw = {
   law_name: string;
   article_no: string;
@@ -9,43 +11,63 @@ type CitedLaw = {
 };
 
 type AnalysisResult = {
-  verdict: "즉시거절" | "협상가능" | "법무검토필요";
+  verdict: string;
   reasoning: string;
   summary: string;
   cited_laws: CitedLaw[];
 };
 
+type ClauseResult = AnalysisResult & { clause_text: string };
+
+type PdfAnalysisResult = { clauses: ClauseResult[] };
+
+// ── 판정 설정 ─────────────────────────────────────────────────────────────────
+
 const VERDICT_CONFIG = {
-  즉시거절:  { emoji: "🔴", label: "즉시 거절",      color: "#c0392b", bg: "#fff0f0", border: "#f5c6c6" },
-  협상가능:  { emoji: "🟡", label: "협상 가능",      color: "#b7791f", bg: "#fffbea", border: "#f6e58d" },
+  즉시거절:    { emoji: "🔴", label: "즉시 거절",      color: "#c0392b", bg: "#fff0f0", border: "#f5c6c6" },
+  협상가능:    { emoji: "🟡", label: "협상 가능",      color: "#b7791f", bg: "#fffbea", border: "#f6e58d" },
   법무검토필요: { emoji: "🟢", label: "법무 검토 필요", color: "#276749", bg: "#f0fff4", border: "#b7dfc9" },
 };
+
+const FALLBACK_CONFIG = { emoji: "⚪", label: "알 수 없음", color: "#555", bg: "#f5f5f5", border: "#ddd" };
+
+function getVerdictConfig(verdict: string) {
+  if (verdict?.includes("즉시 거절")) return VERDICT_CONFIG["즉시거절"];
+  if (verdict?.includes("협상 가능"))  return VERDICT_CONFIG["협상가능"];
+  if (verdict?.includes("법무 검토"))  return VERDICT_CONFIG["법무검토필요"];
+  return VERDICT_CONFIG[verdict as keyof typeof VERDICT_CONFIG] ?? FALLBACK_CONFIG;
+}
+
+// ── 메인 페이지 ───────────────────────────────────────────────────────────────
 
 export default function Home() {
   const [mode, setMode] = useState<"text" | "pdf">("text");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const [textResult, setTextResult] = useState<AnalysisResult | null>(null);
+  const [pdfResult, setPdfResult] = useState<PdfAnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     setFile(e.target.files?.[0] ?? null);
-    setResult(null);
+    setPdfResult(null);
     setError(null);
   }
 
   function handleModeChange(next: "text" | "pdf") {
     setMode(next);
-    setResult(null);
+    setTextResult(null);
+    setPdfResult(null);
     setError(null);
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setLoading(true);
-    setResult(null);
+    setTextResult(null);
+    setPdfResult(null);
     setError(null);
 
     try {
@@ -71,7 +93,12 @@ export default function Home() {
         throw new Error(data.detail ?? "분석 중 오류가 발생했습니다.");
       }
 
-      setResult(await res.json());
+      const data = await res.json();
+      if (mode === "text") {
+        setTextResult(data);
+      } else {
+        setPdfResult(data);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "알 수 없는 오류");
     } finally {
@@ -103,7 +130,7 @@ export default function Home() {
         {mode === "text" ? (
           <textarea
             value={text}
-            onChange={(e) => { setText(e.target.value); setResult(null); setError(null); }}
+            onChange={(e) => { setText(e.target.value); setTextResult(null); setError(null); }}
             placeholder="근로계약서 조항을 붙여넣으세요..."
             style={s.textarea}
             rows={8}
@@ -133,51 +160,48 @@ export default function Home() {
 
       {error && <div style={s.errorBox}>{error}</div>}
 
-      {result && <ResultCard result={result} />}
+      {/* 텍스트 입력 결과 — 단일 카드 */}
+      {textResult && <ResultCard result={textResult} />}
+
+      {/* PDF 결과 — 조항별 카드 목록 */}
+      {pdfResult && (
+        <div style={s.clauseList}>
+          <p style={s.clauseCount}>총 {pdfResult.clauses.length}개 조항 분석 완료</p>
+          {pdfResult.clauses.map((clause, i) => (
+            <ClauseCard key={i} index={i + 1} clause={clause} />
+          ))}
+        </div>
+      )}
     </main>
   );
 }
 
-const FALLBACK_CONFIG = {
-  emoji: "⚪",
-  label: "알 수 없음",
-  color: "#555",
-  bg: "#f5f5f5",
-  border: "#ddd",
-};
+// ── 텍스트 결과 카드 (단일) ───────────────────────────────────────────────────
 
 function ResultCard({ result }: { result: AnalysisResult }) {
-  console.log("verdict_code from backend:", result.verdict);
+  console.log("verdict from backend:", result.verdict);
 
   const [devOpen, setDevOpen] = useState(false);
-
-  const cfg =
-    result.verdict?.includes("즉시 거절") ? VERDICT_CONFIG["즉시거절"] :
-    result.verdict?.includes("협상 가능")  ? VERDICT_CONFIG["협상가능"] :
-    result.verdict?.includes("법무 검토")  ? VERDICT_CONFIG["법무검토필요"] :
-    VERDICT_CONFIG[result.verdict] ?? FALLBACK_CONFIG;
+  const cfg = getVerdictConfig(result.verdict);
   const verifiedLaws = (result.cited_laws ?? []).filter((l) => l.verified);
 
   return (
     <div style={s.card}>
-      {/* 판정 */}
       <div style={{ ...s.verdictBadge, background: cfg.bg, border: `1.5px solid ${cfg.border}`, color: cfg.color }}>
         <span style={s.verdictEmoji}>{cfg.emoji}</span>
         <span style={s.verdictLabel}>{cfg.label}</span>
       </div>
 
-      {/* 이유 */}
       <section style={s.section}>
         <h3 style={s.sectionTitle}>이유</h3>
         <p style={s.sectionBody}>{result.summary}</p>
       </section>
 
-      {/* 법령 근거 */}
       {verifiedLaws.length > 0 && (
         <section style={s.section}>
           <h3 style={s.sectionTitle}>법령 근거</h3>
           <ul style={s.lawList}>
-            {verifiedLaws.filter((l) => l.verified).map((l, i) => (
+            {verifiedLaws.map((l, i) => (
               <li key={i} style={s.lawItem}>
                 <span style={s.lawName}>{`${l.law_name} ${l.article_no}`}</span>
               </li>
@@ -186,42 +210,81 @@ function ResultCard({ result }: { result: AnalysisResult }) {
         </section>
       )}
 
-      {/* 개발자 모드 */}
-      <section style={{ ...s.section, borderTop: "1px solid #f0f0f0" }}>
+      <section style={s.section}>
         <button onClick={() => setDevOpen((v) => !v)} style={s.devButton}>
           {devOpen ? "▲ 개발자 모드 닫기" : "▼ 개발자 모드"}
         </button>
-        {devOpen && (
-          <pre style={s.devPre}>{JSON.stringify(result, null, 2)}</pre>
-        )}
+        {devOpen && <pre style={s.devPre}>{JSON.stringify(result, null, 2)}</pre>}
       </section>
     </div>
   );
 }
 
+// ── PDF 조항별 카드 ───────────────────────────────────────────────────────────
+
+function ClauseCard({ index, clause }: { index: number; clause: ClauseResult }) {
+  const [expanded, setExpanded] = useState(false);
+  const cfg = getVerdictConfig(clause.verdict);
+  const verifiedLaws = (clause.cited_laws ?? []).filter((l) => l.verified);
+
+  return (
+    <div style={s.card}>
+      {/* 헤더: 조항 번호 + 판정 배지 */}
+      <div
+        style={{ ...s.clauseHeader, background: cfg.bg, border: `1.5px solid ${cfg.border}`, cursor: "pointer" }}
+        onClick={() => setExpanded((v) => !v)}
+      >
+        <span style={{ ...s.clauseIndex, color: cfg.color }}>조항 {index}</span>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={{ fontSize: 18 }}>{cfg.emoji}</span>
+          <span style={{ fontSize: 15, fontWeight: 600, color: cfg.color }}>{cfg.label}</span>
+        </div>
+        <span style={{ marginLeft: "auto", color: cfg.color, fontSize: 13 }}>{expanded ? "▲" : "▼"}</span>
+      </div>
+
+      {/* 조항 원문 */}
+      {expanded && (
+        <>
+          <section style={s.section}>
+            <h3 style={s.sectionTitle}>원문</h3>
+            <p style={{ ...s.sectionBody, fontFamily: "monospace", whiteSpace: "pre-wrap" }}>{clause.clause_text}</p>
+          </section>
+
+          <section style={s.section}>
+            <h3 style={s.sectionTitle}>이유</h3>
+            <p style={s.sectionBody}>{clause.summary}</p>
+          </section>
+
+          {verifiedLaws.length > 0 && (
+            <section style={s.section}>
+              <h3 style={s.sectionTitle}>법령 근거</h3>
+              <ul style={s.lawList}>
+                {verifiedLaws.map((l, i) => (
+                  <li key={i} style={s.lawItem}>
+                    <span style={s.lawName}>{`${l.law_name} ${l.article_no}`}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── 스타일 ────────────────────────────────────────────────────────────────────
+
 const s: Record<string, React.CSSProperties> = {
   main: {
-    maxWidth: 640,
+    maxWidth: 680,
     margin: "72px auto",
     padding: "0 24px",
     fontFamily: "'Pretendard', 'Apple SD Gothic Neo', sans-serif",
   },
-  title: {
-    fontSize: 28,
-    fontWeight: 700,
-    marginBottom: 6,
-    color: "#111",
-  },
-  subtitle: {
-    fontSize: 15,
-    color: "#666",
-    marginBottom: 28,
-  },
-  tabs: {
-    display: "flex",
-    gap: 8,
-    marginBottom: 16,
-  },
+  title: { fontSize: 28, fontWeight: 700, marginBottom: 6, color: "#111" },
+  subtitle: { fontSize: 15, color: "#666", marginBottom: 28 },
+  tabs: { display: "flex", gap: 8, marginBottom: 16 },
   tab: {
     padding: "8px 18px",
     border: "1px solid #ddd",
@@ -237,11 +300,7 @@ const s: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     background: "#f0f6ff",
   },
-  form: {
-    display: "flex",
-    flexDirection: "column",
-    gap: 12,
-  },
+  form: { display: "flex", flexDirection: "column", gap: 12 },
   textarea: {
     width: "100%",
     padding: "14px 16px",
@@ -277,10 +336,7 @@ const s: Record<string, React.CSSProperties> = {
     fontWeight: 600,
     cursor: "pointer",
   },
-  buttonDisabled: {
-    backgroundColor: "#b0c8f0",
-    cursor: "not-allowed",
-  },
+  buttonDisabled: { backgroundColor: "#b0c8f0", cursor: "not-allowed" },
   spinner: {
     display: "inline-block",
     width: 14,
@@ -299,8 +355,9 @@ const s: Record<string, React.CSSProperties> = {
     color: "#c0392b",
     fontSize: 14,
   },
+  clauseList: { marginTop: 28, display: "flex", flexDirection: "column", gap: 12 },
+  clauseCount: { fontSize: 13, color: "#888", marginBottom: 4 },
   card: {
-    marginTop: 28,
     border: "1px solid #e8e8e8",
     borderRadius: 12,
     overflow: "hidden",
@@ -311,18 +368,16 @@ const s: Record<string, React.CSSProperties> = {
     gap: 10,
     padding: "20px 24px",
   },
-  verdictEmoji: {
-    fontSize: 28,
-    lineHeight: 1,
+  verdictEmoji: { fontSize: 28, lineHeight: 1 },
+  verdictLabel: { fontSize: 22, fontWeight: 700 },
+  clauseHeader: {
+    display: "flex",
+    alignItems: "center",
+    gap: 10,
+    padding: "14px 20px",
   },
-  verdictLabel: {
-    fontSize: 22,
-    fontWeight: 700,
-  },
-  section: {
-    padding: "16px 24px",
-    borderTop: "1px solid #f0f0f0",
-  },
+  clauseIndex: { fontSize: 13, fontWeight: 600 },
+  section: { padding: "16px 24px", borderTop: "1px solid #f0f0f0" },
   sectionTitle: {
     fontSize: 12,
     fontWeight: 600,
@@ -331,45 +386,11 @@ const s: Record<string, React.CSSProperties> = {
     letterSpacing: "0.06em",
     marginBottom: 8,
   },
-  sectionBody: {
-    fontSize: 14,
-    color: "#333",
-    lineHeight: 1.7,
-    margin: 0,
-  },
-  lawList: {
-    listStyle: "none",
-    margin: 0,
-    padding: 0,
-    display: "flex",
-    flexDirection: "column",
-    gap: 6,
-  },
-  lawItem: {
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    fontSize: 14,
-  },
-  lawName: {
-    color: "#444",
-    fontWeight: 500,
-  },
-  lawArticle: {
-    color: "#0070f3",
-    fontSize: 13,
-    background: "#f0f6ff",
-    padding: "2px 8px",
-    borderRadius: 4,
-  },
-  devButton: {
-    fontSize: 12,
-    color: "#888",
-    background: "none",
-    border: "none",
-    cursor: "pointer",
-    padding: 0,
-  },
+  sectionBody: { fontSize: 14, color: "#333", lineHeight: 1.7, margin: 0 },
+  lawList: { listStyle: "none", margin: 0, padding: 0, display: "flex", flexDirection: "column", gap: 6 },
+  lawItem: { display: "flex", alignItems: "center", gap: 8, fontSize: 14 },
+  lawName: { color: "#444", fontWeight: 500 },
+  devButton: { fontSize: 12, color: "#888", background: "none", border: "none", cursor: "pointer", padding: 0 },
   devPre: {
     marginTop: 10,
     padding: 12,
