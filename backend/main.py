@@ -1,5 +1,4 @@
 import asyncio
-import os
 import re
 import json
 
@@ -17,6 +16,8 @@ from retriever import retrieve
 # ── 설정 ────────────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 TOP_K = 5
+
+client = anthropic.Anthropic()
 
 VERDICT_MAP = {
     "즉시거절": {"label": "즉시 거절", "emoji": "🔴"},
@@ -127,15 +128,10 @@ def _cross_check_citations(cited_laws: list[dict], chunks: list[dict]) -> list[d
 
 
 def _analyze_clause(clause: str) -> dict:
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.")
-
     # 1. 하이브리드 검색
     law_chunks = retrieve(clause, top_k=TOP_K)
 
     # 2. Claude API CoT 추론
-    client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
         model=CLAUDE_MODEL,
         max_tokens=1024,
@@ -188,7 +184,7 @@ async def analyze(file: UploadFile = File(...)):
     if not clauses:
         raise HTTPException(status_code=422, detail="조항을 찾을 수 없습니다. '제N조' 형식의 조항이 있는지 확인하세요.")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     results = await asyncio.gather(
         *[loop.run_in_executor(None, _analyze_clause, c) for c in clauses]
     )
