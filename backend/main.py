@@ -37,16 +37,22 @@ SYSTEM_PROMPT = """당신은 한국 노동법 전문가입니다.
 - 법무검토필요: 중립적·표준적 조항이거나 해석이 필요한 경우. 아래 유형은 반드시 이 판정 사용.
   예) 계약기간 명시, 근무장소 명시, 직무 기술, 비밀유지 조항, 표준적인 복무규정 준수 의무 등.
 
-규칙:
+판정 규칙:
 1. 중립적이거나 단순 사실을 명시하는 조항은 반드시 법무검토필요로 판정.
 2. 즉시거절은 수당 미지급·법정 한도 초과 등 명백한 위법이 확인된 경우에만 사용.
 3. 위법 여부가 불분명하면 즉시거절 대신 협상가능 또는 법무검토필요로 판정.
+
+말투 규칙 (summary 작성 시 반드시 준수):
+- 경어체 사용 금지. "~입니다", "~습니다" 종결어미 사용.
+- 단정적 표현 사용. "~할 수 있습니다", "~인 것 같습니다" 같은 추측 표현 금지.
+- 조항 내용을 먼저 한 문장으로 요약 후, 문제점 또는 검토 포인트를 설명.
+- 협상가능 판정 시 구체적인 협상 방향(예: 기간 단축, 범위 명확화 등)을 제시.
 
 응답 JSON 스키마 (이 형식만 허용):
 {
   "verdict": "즉시거절" | "협상가능" | "법무검토필요",
   "reasoning": "판정 근거를 단계적으로 서술한 CoT (3~5문장)",
-  "summary": "최종 이유 요약 (2~4문장, 일반인이 이해할 수 있도록)",
+  "summary": "최종 이유 요약 (3~5문장). 아래 말투 규칙을 반드시 따를 것. 조항의 구체적인 수치·조건을 인용하고, 어떤 법령의 어떤 기준과 비교했는지, 실제로 어떤 피해나 위험이 생기는지, 어떻게 대응해야 하는지를 모두 포함할 것.",
   "cited_laws": [{"law_name": "법령명", "article_no": "조문번호"}, ...]
 }"""
 # ────────────────────────────────────────────────────────────────────────────
@@ -127,6 +133,31 @@ def _cross_check_citations(cited_laws: list[dict], chunks: list[dict]) -> list[d
     return verified
 
 
+def _split_clauses_with_claude(text: str) -> list[str]:
+    """제N조 패턴 없는 텍스트를 Claude API로 의미 단위 조항 분리."""
+    message = client.messages.create(
+        model=CLAUDE_MODEL,
+        max_tokens=1024,
+        messages=[{
+            "role": "user",
+            "content": (
+                "다음 텍스트를 근로계약 조항 단위로 분리해줘.\n"
+                "각 조항은 하나의 독립적인 근로조건을 담아야 해.\n"
+                "JSON 배열로만 응답해: [\"조항1\", \"조항2\", ...]\n\n"
+                f"{text}"
+            ),
+        }],
+    )
+    m = re.search(r"\[[\s\S]*\]", message.content[0].text)
+    if not m:
+        return [text]
+    try:
+        clauses = json.loads(m.group())
+        return clauses if isinstance(clauses, list) and len(clauses) > 0 else [text]
+    except json.JSONDecodeError:
+        return [text]
+
+
 def _analyze_clause(clause: str) -> dict:
     # 1. 하이브리드 검색
     law_chunks = retrieve(clause, top_k=TOP_K)
@@ -143,7 +174,7 @@ def _analyze_clause(clause: str) -> dict:
     # 3. JSON 파싱
     try:
         parsed = _parse_claude_response(raw_content)
-    except (json.JSONDecodeError, IndexError) as e:
+    except (json.JSONDecodeError, IndexError, ValueError) as e:
         raise HTTPException(status_code=502, detail=f"Claude 응답 파싱 실패: {e}\n원문: {raw_content}")
 
     # 4. Hallucination Cross-check
@@ -199,9 +230,38 @@ async def analyze(file: UploadFile = File(...)):
 
 @app.post("/analyze/text")
 async def analyze_text(body: TextRequest):
-    """텍스트 직접 입력 → 파이프라인 실행."""
-    clause = body.text.strip()
-    if not clause:
+    """텍스트 직접 입력 → 조항 분리 시도 → 병렬 분석 or 단일 분석 fallback."""
+    text = body.text.strip()
+    if not text:
         raise HTTPException(status_code=422, detail="텍스트가 비어 있습니다.")
 
-    return _analyze_clause(clause)
+    clauses = _split_clauses(text)
+
+    if clauses:
+        loop = asyncio.get_running_loop()
+        results = await asyncio.gather(
+            *[loop.run_in_executor(None, _analyze_clause, c) for c in clauses]
+        )
+        return {
+            "clauses": [
+                {"clause_text": clause, **result}
+                for clause, result in zip(clauses, results)
+            ]
+        }
+
+    # 제N조 패턴 없으면 Claude로 의미 단위 분리
+    loop = asyncio.get_running_loop()
+    clauses = await loop.run_in_executor(None, _split_clauses_with_claude, text)
+
+    if len(clauses) == 1:
+        return await loop.run_in_executor(None, _analyze_clause, clauses[0])
+
+    results = await asyncio.gather(
+        *[loop.run_in_executor(None, _analyze_clause, c) for c in clauses]
+    )
+    return {
+        "clauses": [
+            {"clause_text": clause, **result}
+            for clause, result in zip(clauses, results)
+        ]
+    }

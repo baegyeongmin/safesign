@@ -44,7 +44,7 @@ export default function Home() {
   const [mode, setMode] = useState<"text" | "pdf">("text");
   const [text, setText] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [textResult, setTextResult] = useState<AnalysisResult | null>(null);
+  const [textResult, setTextResult] = useState<AnalysisResult | PdfAnalysisResult | null>(null);
   const [pdfResult, setPdfResult] = useState<PdfAnalysisResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -160,8 +160,17 @@ export default function Home() {
 
       {error && <div style={s.errorBox}>{error}</div>}
 
-      {/* 텍스트 입력 결과 — 단일 카드 */}
-      {textResult && <ResultCard result={textResult} />}
+      {/* 텍스트 입력 결과 — 조항 분리됐으면 카드 목록, 아니면 단일 카드 */}
+      {textResult && "clauses" in textResult ? (
+        <div style={s.clauseList}>
+          <p style={s.clauseCount}>총 {(textResult as PdfAnalysisResult).clauses.length}개 조항 분석 완료</p>
+          {(textResult as PdfAnalysisResult).clauses.map((clause, i) => (
+            <ClauseCard key={i} index={i + 1} clause={clause} />
+          ))}
+        </div>
+      ) : textResult ? (
+        <ResultCard result={textResult as AnalysisResult} />
+      ) : null}
 
       {/* PDF 결과 — 조항별 카드 목록 */}
       {pdfResult && (
@@ -212,7 +221,7 @@ function ResultCard({ result }: { result: AnalysisResult }) {
 
       <section style={s.section}>
         <button onClick={() => setDevOpen((v) => !v)} style={s.devButton}>
-          {devOpen ? "▲ 개발자 모드 닫기" : "▼ 개발자 모드"}
+          {devOpen ? "▲ 백엔드 응답 원문 닫기" : "▼ 백엔드 응답 원문 보기 (개발자용)"}
         </button>
         {devOpen && <pre style={s.devPre}>{JSON.stringify(result, null, 2)}</pre>}
       </section>
@@ -224,6 +233,7 @@ function ResultCard({ result }: { result: AnalysisResult }) {
 
 function ClauseCard({ index, clause }: { index: number; clause: ClauseResult }) {
   const [expanded, setExpanded] = useState(false);
+  const [devOpen, setDevOpen] = useState(false);
   const cfg = getVerdictConfig(clause.verdict);
   const verifiedLaws = (clause.cited_laws ?? []).filter((l) => l.verified);
 
@@ -267,6 +277,13 @@ function ClauseCard({ index, clause }: { index: number; clause: ClauseResult }) 
               </ul>
             </section>
           )}
+
+          <section style={s.section}>
+            <button onClick={() => setDevOpen((v) => !v)} style={s.devButton}>
+              {devOpen ? "▲ 백엔드 응답 원문 닫기" : "▼ 백엔드 응답 원문 보기 (개발자용)"}
+            </button>
+            {devOpen && <pre style={s.devPre}>{JSON.stringify(clause, null, 2)}</pre>}
+          </section>
         </>
       )}
     </div>
