@@ -143,6 +143,7 @@ def _split_clauses_with_claude(text: str) -> list[str]:
             "content": (
                 "다음 텍스트를 근로계약 조항 단위로 분리해줘.\n"
                 "각 조항은 하나의 독립적인 근로조건을 담아야 해.\n"
+                "텍스트가 짧거나 단일 조항으로 볼 수 있으면 억지로 쪼개지 말고 전체를 하나의 항목으로 반환해.\n"
                 "JSON 배열로만 응답해: [\"조항1\", \"조항2\", ...]\n\n"
                 f"{text}"
             ),
@@ -221,6 +222,7 @@ async def analyze(file: UploadFile = File(...)):
     )
 
     return {
+        "original_text": full_text,
         "clauses": [
             {"clause_text": clause, **result}
             for clause, result in zip(clauses, results)
@@ -243,6 +245,7 @@ async def analyze_text(body: TextRequest):
             *[loop.run_in_executor(None, _analyze_clause, c) for c in clauses]
         )
         return {
+            "original_text": text,
             "clauses": [
                 {"clause_text": clause, **result}
                 for clause, result in zip(clauses, results)
@@ -254,12 +257,14 @@ async def analyze_text(body: TextRequest):
     clauses = await loop.run_in_executor(None, _split_clauses_with_claude, text)
 
     if len(clauses) == 1:
-        return await loop.run_in_executor(None, _analyze_clause, clauses[0])
+        result = await loop.run_in_executor(None, _analyze_clause, clauses[0])
+        return {"original_text": text, **result}
 
     results = await asyncio.gather(
         *[loop.run_in_executor(None, _analyze_clause, c) for c in clauses]
     )
     return {
+        "original_text": text,
         "clauses": [
             {"clause_text": clause, **result}
             for clause, result in zip(clauses, results)

@@ -12,6 +12,16 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko">
+      <head>
+        <style>{`
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          @keyframes spin { to { transform: rotate(360deg); } }
+          @media (max-width: 768px) {
+            .result-layout { flex-direction: column !important; }
+            .right-panel { position: static !important; }
+          }
+        `}</style>
+      </head>
       <body>{children}</body>
     </html>
   );
