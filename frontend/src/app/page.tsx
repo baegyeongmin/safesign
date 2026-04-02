@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 
 // ── 타입 ──────────────────────────────────────────────────────────────────────
 
@@ -33,8 +33,13 @@ const VERDICT = {
     badgeBg: "#fefce8", badgeColor: "#ca8a04",
   },
   법무검토필요: {
-    label: "법무 검토 필요", emoji: "🟢", color: "#16a34a",
-    bg: "rgba(34,197,94,0.15)", border: "#22c55e",
+    label: "법무 검토 필요", emoji: "🔵", color: "#64748b",
+    bg: "rgba(100,116,139,0.1)", border: "#cbd5e1",
+    badgeBg: "#f1f5f9", badgeColor: "#64748b",
+  },
+  문제없음: {
+    label: "문제 없음", emoji: "🟢", color: "#16a34a",
+    bg: "rgba(34,197,94,0.12)", border: "#86efac",
     badgeBg: "#f0fdf4", badgeColor: "#16a34a",
   },
 };
@@ -49,8 +54,10 @@ function getV(verdict: string) {
   if (verdict?.includes("즉시")) return VERDICT["즉시거절"];
   if (verdict?.includes("협상")) return VERDICT["협상가능"];
   if (verdict?.includes("법무") || verdict?.includes("검토")) return VERDICT["법무검토필요"];
+  if (verdict?.includes("문제없음") || verdict?.includes("문제 없음")) return VERDICT["문제없음"];
   return VERDICT[verdict as keyof typeof VERDICT] ?? FALLBACK;
 }
+
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -277,6 +284,17 @@ function ResultScreen({
   onToggleDev: () => void;
 }) {
   const selected = clauses[selectedIndex];
+  const listRef = useRef<HTMLDivElement>(null);
+  const itemRefs = useRef<(HTMLDivElement | null)[]>([]);
+
+  useEffect(() => {
+    const item = itemRefs.current[selectedIndex];
+    const list = listRef.current;
+    if (item && list) {
+      list.scrollTop = item.offsetTop - list.offsetTop;
+    }
+  }, [selectedIndex]);
+
   const counts = {
     즉시거절: clauses.filter((c) => c.verdict?.includes("즉시")).length,
     협상가능: clauses.filter((c) => c.verdict?.includes("협상")).length,
@@ -295,7 +313,8 @@ function ResultScreen({
             if (seg.clauseIndex === null) {
               return <span key={i} style={{ whiteSpace: "pre-wrap" }}>{seg.text}</span>;
             }
-            const v = getV(clauses[seg.clauseIndex].verdict);
+            const clause = clauses[seg.clauseIndex];
+            const v = getV(clause.verdict);
             const isSelected = seg.clauseIndex === selectedIndex;
             return (
               <span
@@ -350,13 +369,14 @@ function ResultScreen({
           <div style={{ padding: "14px 16px", borderBottom: "1px solid #f1f5f9" }}>
             <span style={s.panelLabel}>조항 목록</span>
           </div>
-          <div style={{ maxHeight: 260, overflowY: "auto" }}>
+          <div ref={listRef} style={{ maxHeight: 260, overflowY: "auto" }}>
             {clauses.map((clause, i) => {
               const v = getV(clause.verdict);
               const isSelected = i === selectedIndex;
               return (
                 <div
                   key={i}
+                  ref={(el) => { itemRefs.current[i] = el; }}
                   onClick={() => onSelect(i)}
                   style={{
                     ...s.miniCard,
