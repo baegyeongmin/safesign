@@ -213,10 +213,15 @@ async def analyze(file: UploadFile = File(...)):
         raise HTTPException(status_code=422, detail="PDF에서 텍스트를 추출할 수 없습니다.")
 
     clauses = _split_clauses(full_text)
-    if not clauses:
-        raise HTTPException(status_code=422, detail="조항을 찾을 수 없습니다. '제N조' 형식의 조항이 있는지 확인하세요.")
-
     loop = asyncio.get_running_loop()
+
+    if not clauses:
+        clauses = await loop.run_in_executor(None, _split_clauses_with_claude, full_text)
+
+    if len(clauses) == 1:
+        result = await loop.run_in_executor(None, _analyze_clause, clauses[0])
+        return {"original_text": full_text, **result}
+
     results = await asyncio.gather(
         *[loop.run_in_executor(None, _analyze_clause, c) for c in clauses]
     )

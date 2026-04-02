@@ -433,6 +433,7 @@ const s: Record<string, React.CSSProperties> = {
     background: "#f8fafc",
     fontFamily: "'Pretendard', 'Apple SD Gothic Neo', sans-serif",
     color: "#1e293b",
+    userSelect: "none",
   },
 
   // 헤더
@@ -577,6 +578,7 @@ const s: Record<string, React.CSSProperties> = {
     color: "#1e293b",
     lineHeight: 1.85,
     wordBreak: "break-word" as const,
+    userSelect: "text",
   },
 
   // 공통 카드
@@ -631,7 +633,7 @@ const s: Record<string, React.CSSProperties> = {
     letterSpacing: "0.07em",
     marginBottom: 6,
   },
-  detailBody: { fontSize: 14, color: "#334155", lineHeight: 1.75, margin: 0 },
+  detailBody: { fontSize: 14, color: "#334155", lineHeight: 1.75, margin: 0, userSelect: "text" },
   lawTag: {
     display: "inline-block",
     padding: "4px 10px",
@@ -640,6 +642,7 @@ const s: Record<string, React.CSSProperties> = {
     borderRadius: 6,
     fontSize: 12,
     fontWeight: 500,
+    userSelect: "text",
   },
 
   // 개발자
